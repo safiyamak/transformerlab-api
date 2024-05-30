@@ -4,7 +4,7 @@ import shutil
 import unicodedata
 import json
 import aiofiles
-from datasets import load_dataset, load_dataset_builder
+from datasets import load_dataset, load_dataset_builder, get_dataset_config_names
 from fastapi import APIRouter, HTTPException, UploadFile, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -45,13 +45,15 @@ async def dataset_gallery() -> Any:
                               for dataset in local_datasets)
     for dataset in gallery:
         dataset['downloaded'] = True if dataset['huggingfacerepo'] in local_dataset_names else False
+        dataset['config_names'] = get_dataset_config_names(
+            dataset['huggingfacerepo'])
     return {"status": "success", "data": gallery}
 
 # Get info on dataset from huggingface
 
 
 @router.get("/info", summary="Fetch the details of a particular dataset.")
-async def dataset_info(dataset_id: str):
+async def dataset_info(dataset_id: str, config_name: str = None):
     d = await db.get_dataset(dataset_id)
 
     if d is None:
@@ -60,11 +62,19 @@ async def dataset_info(dataset_id: str):
     r = {}
     # This means it is a custom dataset the user uploaded
     if d["location"] == "local":
-        dataset = load_dataset(path=dirs.dataset_dir_by_id(dataset_id))
+        if (config_name is not None):
+            dataset = load_dataset(path=dirs.dataset_dir_by_id(
+                dataset_id), name=config_name)
+        else:
+            dataset = load_dataset(path=dirs.dataset_dir_by_id(dataset_id))
+
         # print(dataset['train'].features)
         r["features"] = dataset["train"].features
     else:
-        ds_builder = load_dataset_builder(dataset_id)
+        if (config_name is not None):
+            ds_builder = load_dataset_builder(dataset_id, config_name)
+        else:
+            ds_builder = load_dataset_builder(dataset_id)
         r = {
             "description": ds_builder.info.description,
             "features": ds_builder.info.features,
@@ -77,6 +87,8 @@ async def dataset_info(dataset_id: str):
             "supervised_keys": ds_builder.info.supervised_keys,
             "version": ds_builder.info.version,
         }
+        if (config_name is not None):
+            r["config_names"] = config_name
     return r
 
 
@@ -87,14 +99,18 @@ async def dataset_info(dataset_id: str):
 async def dataset_preview(dataset_id: str = Query(description="The ID of the dataset to preview. This can be a HuggingFace dataset ID or a local dataset ID."),
                           offset: int = Query(
                               0, description='The starting index from where to fetch the data.', ge=0),
-                          limit: int = Query(10, description="The maximum number of data items to fetch.", ge=1, le=1000)) -> Any:
+                          limit: int = Query(10, description="The maximum number of data items to fetch.", ge=1, le=1000), config_name: str = None) -> Any:
     d = await db.get_dataset(dataset_id)
     dataset_len = 0
     result = {}
     # This means it is a custom dataset the user uploaded
     if d["location"] == "local":
         try:
-            dataset = load_dataset(path=dirs.dataset_dir_by_id(dataset_id))
+            if (config_name is not None):
+                dataset = load_dataset(path=dirs.dataset_dir_by_id(
+                    dataset_id), name=config_name)
+            else:
+                dataset = load_dataset(path=dirs.dataset_dir_by_id(dataset_id))
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
             return {"status": "error", "message":  error_msg}
@@ -102,7 +118,10 @@ async def dataset_preview(dataset_id: str = Query(description="The ID of the dat
         result['columns'] = dataset["train"][offset:min(
             offset+limit, dataset_len)]
     else:
-        dataset = load_dataset(dataset_id)
+        if (config_name is not None):
+            dataset = load_dataset(dataset_id, config_name)
+        else:
+            dataset = load_dataset(dataset_id)
         dataset_len = len(dataset["train"])
         result['columns'] = dataset["train"][offset:min(
             offset+limit, dataset_len)]
@@ -111,7 +130,7 @@ async def dataset_preview(dataset_id: str = Query(description="The ID of the dat
 
 
 @router.get("/download", summary="Download a dataset from the HuggingFace Hub to the LLMLab server.")
-async def dataset_download(dataset_id: str):
+async def dataset_download(dataset_id: str, config_name: str = None):
     # Check to make sure we don't have a dataset with this name
     # Possibly we want to allow redownloading in the future but for we can't add duplicate dataset_id to the DB
     row = await db.get_dataset(dataset_id)
@@ -119,18 +138,29 @@ async def dataset_download(dataset_id: str):
         return {"status": "error", "message": f"A dataset with the name {dataset_id} already exists"}
 
     try:
-        dataset = load_dataset(dataset_id)
-        ds_builder = load_dataset_builder(dataset_id)
+        if (config_name is not None):
+            ds_builder = load_dataset_builder(dataset_id, config_name)
+        else:
+            ds_builder = load_dataset_builder(dataset_id)
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        return {"status": "error", "message":  error_msg}
+        return {"status": "error", "message": error_msg}
 
     dataset_size = ds_builder.info.download_size
     if not dataset_size:
         dataset_size = -1
-    await db.create_huggingface_dataset(
-        dataset_id, ds_builder.info.description, dataset_size
-    )
+    try:
+        if (config_name is not None):
+            await db.create_huggingface_dataset(
+                dataset_id, ds_builder.info.description, dataset_size, config_name
+            )
+        else:
+            await db.create_huggingface_dataset(
+                dataset_id, ds_builder.info.description, dataset_size
+            )
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        return {"status": "error", "message": error_msg}
 
     return {"status": "success"}
 

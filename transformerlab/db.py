@@ -24,7 +24,7 @@ async def init():
         "CREATE TABLE IF NOT EXISTS model(id INTEGER PRIMARY KEY, model_id UNIQUE, name, json_data JSON)"
     )
     await db.execute(
-        "CREATE TABLE IF NOT EXISTS dataset(id INTEGER PRIMARY KEY, dataset_id UNIQUE, location, description, size)"
+        "CREATE TABLE IF NOT EXISTS dataset(id INTEGER PRIMARY KEY, dataset_id UNIQUE, location, description, size, config_name)"
     )
     await db.execute(
         """CREATE TABLE IF NOT EXISTS 
@@ -153,26 +153,27 @@ async def get_datasets():
     return data
 
 
-async def create_huggingface_dataset(dataset_id, description, size):
-
+async def create_huggingface_dataset(dataset_id, description, size, config_name=None):
+    await db.execute("ALTER TABLE dataset ADD COLUMN config_name TEXT")
     await db.execute(
         """
-        INSERT INTO dataset (dataset_id, location, description, size) 
-        VALUES (?, ?, ?, ?)
+        INSERT INTO dataset (dataset_id, location, description, size, config_name) 
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (dataset_id, "huggingfacehub", description, size),
+        (dataset_id, "huggingfacehub", description, size,
+         "" if config_name is None else config_name),
     )
     await db.commit()
 
 
 async def create_local_dataset(dataset_id):
-
+    await db.execute("ALTER TABLE dataset ADD COLUMN config_name TEXT")
     await db.execute(
         """
-        INSERT INTO dataset (dataset_id, location, description, size) 
-        VALUES (?, ?, ?, ?)
+        INSERT INTO dataset (dataset_id, location, description, size, config_name) 
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (dataset_id, "local", "", -1),
+        (dataset_id, "local", "", -1, ""),
     )
     await db.commit()
 
